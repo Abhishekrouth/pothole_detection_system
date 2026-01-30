@@ -42,7 +42,7 @@ and performs real time potholes detection.
 
 1. Potholes detected in a video
 
-<video controls src="source/output_potholes_video.mp4" title="Title"></video>
+[Click here to watch the output video](source/output_potholes_video.mp4)
 
 2. Potholes detected in a image
 
