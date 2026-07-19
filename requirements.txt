@@ -1,6 +1,5 @@
 fastapi
 python-multipart
-gradio
 ultralytics
 opencv-python-headless
 numpy
