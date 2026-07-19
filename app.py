@@ -5,6 +5,15 @@ import base64
 import csv
 import time
 from ultralytics import YOLO
+
+import gradio_client.utils as _gc_utils
+_orig_json_schema_to_python_type = _gc_utils._json_schema_to_python_type
+def _safe_json_schema_to_python_type(schema, defs=None):
+    if isinstance(schema, bool):
+        return "bool" if schema else "Any"
+    return _orig_json_schema_to_python_type(schema, defs)
+_gc_utils._json_schema_to_python_type = _safe_json_schema_to_python_type
+
 import gradio as gr
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
