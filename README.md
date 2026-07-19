@@ -1,3 +1,14 @@
+---
+title: Pothole Detector
+emoji: 🕳️
+colorFrom: blue
+colorTo: gray
+sdk: gradio
+app_file: app.py
+pinned: false
+license: mit
+---
+
 # Pothole Detection System
 
 This project is a Flask-based pothole detection API. It uses a custom YOLO model with OpenCV to detect potholes in uploaded images and videos. For videos, it can also match detected potholes with GPS coordinates and export the results to a CSV file.
