@@ -8,11 +8,16 @@ from gps_data.load_gps import load_gps_data, get_gps_for_timestamp
 from gps_data.reverse_geocode import geocode
 import csv
 import base64
+import spaces
 
 app = Flask(__name__)
 CORS(app)
 
 model = YOLO("model/best.pt")
+
+@spaces.GPU
+def predict_potholes(img, conf=0.25):
+    return model(img, conf=conf)
 
 location_cache = {}
 gps_data = load_gps_data("gps_data/gps_data.csv")
@@ -51,7 +56,7 @@ def detect():
     np_img = np.frombuffer(image_file, np.uint8)
     img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
-    results = model(img)
+    results = predict_potholes(img)
     annotated = results[0].plot()
 
     output_path = "source/photo_detected_2.jpg"
@@ -127,7 +132,7 @@ def detect_videos():
 
         timestamp = frame_index / fps
 
-        results = model(frame, conf=0.5)
+        results = predict_potholes(frame, conf=0.5)
 
         for box in results[0].boxes:
             confidence = float(box.conf[0])
