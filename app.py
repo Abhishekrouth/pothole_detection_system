@@ -27,13 +27,13 @@ model = None
 try:
     import spaces
     @spaces.GPU
-    def predict_potholes(img, conf=0.25):
+    def predict_potholes(img, conf=0.15):
         global model
         if model is None:
             model = YOLO("model/best.pt")
         return model(img, conf=conf)
 except ImportError:
-    def predict_potholes(img, conf=0.25):
+    def predict_potholes(img, conf=0.15):
         global model
         if model is None:
             model = YOLO("model/best.pt")
@@ -77,12 +77,17 @@ app.add_middleware(
 
 # 4. Custom API route for image detection
 @app.post("/detect_potholes_images")
-async def detect(image: UploadFile = File(...), latitude: str = Form(None), longitude: str = Form(None)):
+async def detect(
+    image: UploadFile = File(...),
+    latitude: str = Form(None),
+    longitude: str = Form(None),
+    conf: float = Form(0.15)
+):
     image_bytes = await image.read()
     np_img = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
-    results = predict_potholes(img)
+    results = predict_potholes(img, conf=conf)
     annotated = results[0].plot()
 
     # Encode annotated image to base64
@@ -115,7 +120,10 @@ async def detect(image: UploadFile = File(...), latitude: str = Form(None), long
 
 # 5. Video detection endpoint
 @app.post("/detect_potholes_videos")
-async def detect_video(video: UploadFile = File(...)):
+async def detect_video(
+    video: UploadFile = File(...),
+    conf: float = Form(0.15)
+):
     os.makedirs("source2", exist_ok=True)
     input_path = "source2/input_potholes_video.mp4"
     output_path = "source2/output_potholes_video.mp4"
@@ -144,7 +152,7 @@ async def detect_video(video: UploadFile = File(...)):
         if not ret:
             break
 
-        results = predict_potholes(frame)
+        results = predict_potholes(frame, conf=conf)
         annotated_frame = results[0].plot()
         out.write(annotated_frame)
 
