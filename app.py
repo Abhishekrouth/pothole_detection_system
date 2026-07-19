@@ -16,6 +16,7 @@ _gc_utils._json_schema_to_python_type = _safe_json_schema_to_python_type
 
 import gradio as gr
 from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from gps_data.load_gps import load_gps_data, get_gps_for_timestamp
 from gps_data.reverse_geocode import geocode
@@ -39,6 +40,14 @@ except ImportError:
         return model(img, conf=conf)
 
 location_cache = {}
+
+# Load GPS data on startup if available
+gps_data_list = []
+if os.path.exists("gps_data/gps_data.csv"):
+    try:
+        gps_data_list = load_gps_data("gps_data/gps_data.csv")
+    except Exception:
+        gps_data_list = []
 
 # 2. Define Gradio Interface function (so Hugging Face is happy)
 def gradio_predict(img):
@@ -66,7 +75,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 4. Custom API route for Vercel webcam frame detection
+# 4. Custom API route for image detection
 @app.post("/detect_potholes_images")
 async def detect(image: UploadFile = File(...), latitude: str = Form(None), longitude: str = Form(None)):
     image_bytes = await image.read()
@@ -104,6 +113,82 @@ async def detect(image: UploadFile = File(...), latitude: str = Form(None), long
         "city": city
     }
 
-# 5. Local development launch (if run directly)
+# 5. Video detection endpoint
+@app.post("/detect_potholes_videos")
+async def detect_video(video: UploadFile = File(...)):
+    os.makedirs("source2", exist_ok=True)
+    input_path = "source2/input_potholes_video.mp4"
+    output_path = "source2/output_potholes_video.mp4"
+    csv_path = "source2/potholes_detected.csv"
+
+    video_bytes = await video.read()
+    with open(input_path, "wb") as f:
+        f.write(video_bytes)
+
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        return {"error": "Could not open uploaded video file."}
+
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    records = []
+    frame_index = 0
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        results = predict_potholes(frame)
+        annotated_frame = results[0].plot()
+        out.write(annotated_frame)
+
+        boxes = results[0].boxes
+        if len(boxes) > 0:
+            timestamp = round(frame_index / fps, 2)
+            lat, lon = (0.0, 0.0)
+            city = ""
+
+            if gps_data_list:
+                try:
+                    lat, lon = get_gps_for_timestamp(timestamp, gps_data_list)
+                    lat_r, lon_r = round(lat, 4), round(lon, 4)
+                    key = (lat_r, lon_r)
+                    if key not in location_cache:
+                        location_cache[key] = geocode(lat_r, lon_r)
+                    city = location_cache[key]
+                except Exception:
+                    city = ""
+
+            for box in boxes:
+                conf = float(box.conf[0])
+                records.append([timestamp, lat, lon, conf, city])
+
+        frame_index += 1
+
+    cap.release()
+    out.release()
+
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "lat", "lon", "confidence", "city"])
+        writer.writerows(records)
+
+    return FileResponse(output_path, media_type="video/mp4", filename="pothole_detected.mp4")
+
+# 6. Download detected pothole data CSV
+@app.get("/download_potholes_data")
+async def download_potholes_data():
+    csv_path = "source2/potholes_detected.csv"
+    if not os.path.exists(csv_path):
+        return {"error": "No pothole data records found."}
+    return FileResponse(csv_path, media_type="text/csv", filename="potholes_detected.csv")
+
+# 7. Local development launch (if run directly)
 if __name__ == "__main__":
     demo.launch()
