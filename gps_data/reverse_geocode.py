@@ -7,7 +7,7 @@ def geocode(lat, lon):
         "lon": lon,
         "format": "json"
     }
-    headers = {"User": "pothole detection app"}
+    headers = {"User-Agent": "pothole detection app"}
 
     response = requests.get(url, params=params, headers=headers)
     if response.status_code == 200:

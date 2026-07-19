@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-Powered Road Monitoring System</title>
+    <!-- Google Fonts: Plus Jakarta Sans -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #f4f6f8;
+            --card-bg: rgba(255, 255, 255, 0.95);
+            --border-color: rgba(0, 47, 108, 0.08);
+            --border-glow: rgba(0, 47, 108, 0.2);
+            --accent-color: #002f6c; /* Oregon Navy */
+            --accent-hover: #001f4d;
+            --highlight-color: #ffc72c; /* Oregon Gold */
+            --text-color: #1e293b; /* Dark Slate */
+            --text-muted: #64748b;
+            --success-color: #10b981;
+            --danger-color: #ef4444;
+            --card-radius: 12px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                linear-gradient(rgba(244, 246, 248, 0.2), rgba(244, 246, 248, 0.2)),
+                url('/templates/highway.jpg');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow-x: hidden;
+        }
+
+        /* Glassmorphism card container (Light Mode) */
+        .container {
+            width: 100%;
+            max-width: 480px;
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0, 47, 108, 0.12);
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Top Header Band in Deep Navy & Gold */
+        .header-hud {
+            background: var(--accent-color);
+            margin: -24px -24px 20px -24px;
+            padding: 22px 24px;
+            border-bottom: 4px solid var(--highlight-color);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            box-shadow: 0 4px 10px rgba(0, 47, 108, 0.1);
+        }
+
+        .header-top-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+        }
+
+        h1 {
+            font-weight: 800;
+            font-size: 1.15rem;
+            letter-spacing: -0.01em;
+            color: #ffffff;
+        }
+
+        .subtitle {
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 0.72rem;
+            font-weight: 500;
+            line-height: 1.4;
+            text-align: left;
+        }
+
+        .badge-live {
+            display: flex;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            color: #ffffff;
+            text-transform: uppercase;
+        }
+
+        .badge-live .pulse-dot {
+            width: 6px;
+            height: 6px;
+            background-color: var(--success-color);
+            border-radius: 50%;
+            margin-right: 6px;
+            box-shadow: 0 0 8px var(--success-color);
+            animation: pulse-green 1.8s infinite;
+        }
+
+        .info-icon-btn {
+            background: transparent;
+            border: none;
+            color: #ffffff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+
+        .info-icon-btn:hover {
+            opacity: 1;
+        }
+
+        /* Camera Frame / HUD */
+        .viewport-wrapper {
+            position: relative;
+            width: 100%;
+            border-radius: 12px;
+            overflow: hidden;
+            background-color: #04060a;
+            aspect-ratio: 4/3;
+            margin-bottom: 20px;
+            border: 1px solid rgba(0, 47, 108, 0.1);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+
+        video, img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        #processed-frame {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            z-index: 2;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: #ffffff;
+            border: 1px solid rgba(0, 47, 108, 0.08);
+            border-radius: 12px;
+            padding: 14px;
+            text-align: left;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0, 47, 108, 0.02);
+        }
+
+        .stat-card:hover {
+            border-color: var(--border-glow);
+            box-shadow: 0 4px 10px rgba(0, 47, 108, 0.06);
+            transform: translateY(-1px);
+        }
+
+        .icon-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 30px;
+            background: rgba(0, 47, 108, 0.04);
+            border-radius: 8px;
+            color: var(--accent-color);
+            flex-shrink: 0;
+            border: 1px solid rgba(0, 47, 108, 0.06);
+        }
+
+        .icon-wrapper.success {
+            background: rgba(16, 185, 129, 0.05);
+            color: var(--success-color);
+            border-color: rgba(16, 185, 129, 0.1);
+        }
+
+        .stat-info {
+            flex-grow: 1;
+            overflow: hidden;
+        }
+
+        .stat-label {
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+            color: var(--text-muted);
+            margin-bottom: 3px;
+        }
+
+        .stat-val {
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: var(--text-color);
+            word-break: break-all;
+            line-height: 1.25;
+        }
+
+        .system-status-container {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background-color: var(--text-muted);
+        }
+
+        .status-dot.active {
+            background-color: var(--success-color);
+            box-shadow: 0 0 6px var(--success-color);
+            animation: pulse-green 1.5s infinite;
+        }
+
+        /* Buttons Control Panel */
+        .control-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 14px 20px;
+            font-size: 0.88rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            border-radius: 12px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            color: white;
+            background: var(--accent-color);
+            box-shadow: 0 4px 6px rgba(0, 47, 108, 0.15);
+        }
+
+        .btn:hover:not(:disabled) {
+            background: var(--accent-hover);
+            box-shadow: 0 6px 12px rgba(0, 47, 108, 0.25);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn.scanning {
+            background: var(--danger-color);
+            box-shadow: 0 4px 6px rgba(239, 68, 68, 0.15);
+        }
+
+        .btn.scanning:hover:not(:disabled) {
+            background: #dc2626;
+            box-shadow: 0 6px 12px rgba(239, 68, 68, 0.25);
+        }
+
+        .btn.secondary {
+            background: #ffffff;
+            border: 1px solid rgba(0, 47, 108, 0.2);
+            color: var(--accent-color);
+            box-shadow: none;
+        }
+
+        .btn.secondary:hover:not(:disabled) {
+            background: rgba(0, 47, 108, 0.03);
+            border-color: var(--accent-color);
+        }
+
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Info Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(7, 9, 14, 0.5);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.3s ease;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal-content {
+            background: #ffffff;
+            border-radius: 16px;
+            max-width: 400px;
+            width: 90%;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+            border: 1px solid rgba(0, 47, 108, 0.1);
+            transform: scale(0.9);
+            transition: all 0.3s ease;
+        }
+
+        .modal-overlay.active .modal-content {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            background: var(--accent-color);
+            color: #ffffff;
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 3.5px solid var(--highlight-color);
+        }
+
+        .modal-title {
+            font-weight: 800;
+            font-size: 0.95rem;
+            text-transform: uppercase;
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: #ffffff;
+            cursor: pointer;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+            display: flex;
+            align-items: center;
+        }
+
+        .modal-close:hover {
+            opacity: 1;
+        }
+
+        .modal-body {
+            padding: 20px;
+            color: var(--text-color);
+            font-size: 0.88rem;
+            line-height: 1.5;
+            text-align: left;
+        }
+
+        .modal-body p {
+            margin-bottom: 12px;
+        }
+
+        .modal-body p:last-child {
+            margin-bottom: 0;
+        }
+
+        /* Animations */
+        @keyframes pulse-green {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        
+        <!-- Header Info (Navy/Gold style) -->
+        <div class="header-hud">
+            <div class="header-top-row">
+                <h1>AI Potholes Detector</h1>
+                <!-- About app "i" button -->
+                <button id="info-btn" class="info-icon-btn" title="About App">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                </button>
+            </div>
+            <div class="subtitle">Detect Potholes in Real Time with GPS and Share Reports with Government Agencies</div>
+        </div>
+
+        <!-- Camera Viewport -->
+        <div id="viewport-container" class="viewport-wrapper">
+            <video id="webcam" autoplay playsinline muted></video>
+            <img id="processed-frame" alt="Processed Detection">
+        </div>
+
+        <!-- HUD Statistics Grid -->
+        <div class="stats-grid">
+            <!-- Latitude -->
+            <div class="stat-card">
+                <div class="icon-wrapper">
+                    <!-- Map Pin Icon -->
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                </div>
+                <div class="stat-info">
+                    <div class="stat-label">Latitude</div>
+                    <div id="lat-val" class="stat-val">--.------</div>
+                </div>
+            </div>
+
+            <!-- Longitude -->
+            <div class="stat-card">
+                <div class="icon-wrapper">
+                    <!-- Compass Icon -->
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg>
+                </div>
+                <div class="stat-info">
+                    <div class="stat-label">Longitude</div>
+                    <div id="lon-val" class="stat-val">--.------</div>
+                </div>
+            </div>
+
+            <!-- Potholes Count -->
+            <div class="stat-card">
+                <div class="icon-wrapper">
+                    <!-- Alert Triangle Icon -->
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                </div>
+                <div class="stat-info">
+                    <div class="stat-label">Potholes</div>
+                    <div id="pothole-count" class="stat-val">0</div>
+                </div>
+            </div>
+
+            <!-- System Status -->
+            <div class="stat-card">
+                <div class="icon-wrapper success" id="status-icon-wrapper">
+                    <!-- Activity Icon -->
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                </div>
+                <div class="stat-info">
+                    <div class="stat-label">Status</div>
+                    <div class="system-status-container">
+                        <span id="status-dot" class="status-dot"></span>
+                        <span id="status-text" class="stat-val">Idle</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Location Name -->
+            <div class="stat-card" style="grid-column: span 2;">
+                <div class="icon-wrapper">
+                    <!-- Map/Globe Icon -->
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                </div>
+                <div class="stat-info">
+                    <div class="stat-label">Current Address</div>
+                    <div id="location-val" class="stat-val" style="font-size: 0.78rem;">Searching location...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls panel -->
+        <div class="control-panel">
+            <button id="scan-btn" class="btn">
+                <!-- Camera icon -->
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                Start Scanning
+            </button>
+            <button id="export-btn" class="btn secondary" disabled>
+                <!-- Download icon -->
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Export CSV Report
+            </button>
+        </div>
+
+    </div>
+
+    <!-- About App Summary Modal -->
+    <div id="info-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">About Inspector</span>
+                <button id="close-modal" class="modal-close" title="Close">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p>This system logs and tracks road safety hazards in real-time.</p>
+                <p>Using your phone's camera, it leverages a trained YOLO computer vision model to detect potholes. The application automatically links every detection to your exact live GPS coordinates, compiling a downloadable CSV report ready to share with highway authorities.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const processedFrame = document.getElementById('processed-frame');
+        const viewportContainer = document.getElementById('viewport-container');
+        const scanBtn = document.getElementById('scan-btn');
+        const exportBtn = document.getElementById('export-btn');
+        const latVal = document.getElementById('lat-val');
+        const lonVal = document.getElementById('lon-val');
+        const potholeCountVal = document.getElementById('pothole-count');
+        const locationVal = document.getElementById('location-val');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+
+        // Modal Elements
+        const infoBtn = document.getElementById('info-btn');
+        const infoModal = document.getElementById('info-modal');
+        const closeModal = document.getElementById('close-modal');
+
+        let lat = null;
+        let lon = null;
+        let scanInterval = null;
+        let isScanning = false;
+        let detectedPotholes = [];
+
+        // Geocoding throttler variables
+        let lastGeocodeTime = 0;
+        let lastLat = null;
+        let lastLon = null;
+
+        // Modal Event Listeners
+        infoBtn.addEventListener('click', () => {
+            infoModal.classList.add('active');
+        });
+
+        closeModal.addEventListener('click', () => {
+            infoModal.classList.remove('active');
+        });
+
+        infoModal.addEventListener('click', (e) => {
+            if (e.target === infoModal) {
+                infoModal.classList.remove('active');
+            }
+        });
+
+        function updateLocationName(newLat, newLon) {
+            const now = Date.now();
+            // Limit requests to once every 10 seconds, and only if moved
+            if (now - lastGeocodeTime < 10000) return;
+            if (lastLat !== null && Math.abs(newLat - lastLat) < 0.0001 && Math.abs(newLon - lastLon) < 0.0001) return;
+
+            lastGeocodeTime = now;
+            lastLat = newLat;
+            lastLon = newLon;
+
+            fetch(`https://nominatim.openstreetmap.org/reverse?lat=${newLat}&lon=${newLon}&format=json`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data && data.display_name) {
+                        locationVal.textContent = data.display_name;
+                    } else {
+                        locationVal.textContent = "Unknown location";
+                    }
+                })
+                .catch(err => {
+                    console.error("Geocoding failed:", err);
+                    locationVal.textContent = "Location unavailable";
+                });
+        }
+
+        // 1. Get Live GPS Data
+        if (navigator.geolocation) {
+            navigator.geolocation.watchPosition((position) => {
+                lat = position.coords.latitude;
+                lon = position.coords.longitude;
+                latVal.textContent = lat.toFixed(6);
+                lonVal.textContent = lon.toFixed(6);
+                
+                // Trigger live geocoded location address update
+                updateLocationName(lat, lon);
+            }, (error) => {
+                console.error("GPS Access Denied:", error);
+                statusText.textContent = "GPS Blocked";
+            }, {
+                enableHighAccuracy: true,
+                timeout: 5000,
+                maximumAge: 0
+            });
+        } else {
+            statusText.textContent = "GPS Error";
+        }
+
+        // 2. Request Camera Feed (preferring rear camera)
+        navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: "environment", // rear camera
+                width: { ideal: 640 },
+                height: { ideal: 480 }
+            },
+            audio: false
+        })
+        .then((stream) => {
+            video.srcObject = stream;
+        })
+        .catch((err) => {
+            console.error("Camera Access Denied:", err);
+            statusText.textContent = "Cam Blocked";
+        });
+
+        // 3. Start/Stop Scanner
+        scanBtn.addEventListener('click', () => {
+            if (isScanning) {
+                // Stop Scanning
+                clearInterval(scanInterval);
+                isScanning = false;
+                scanBtn.innerHTML = `
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                    Start Scanning
+                `;
+                scanBtn.classList.remove('scanning');
+                statusDot.classList.remove('active');
+                statusText.textContent = "Idle";
+                processedFrame.style.display = 'none';
+            } else {
+                // Start Scanning
+                isScanning = true;
+                scanBtn.innerHTML = `
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                    Stop Scanning
+                `;
+                scanBtn.classList.add('scanning');
+                statusDot.classList.add('active');
+                statusText.textContent = "Scanning...";
+                
+                // Capture and send frame every 1.5 seconds
+                scanInterval = setInterval(captureAndUploadFrame, 1500);
+            }
+        });
+
+        // 4. Capture Canvas Frame & Upload
+        function captureAndUploadFrame() {
+            if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+            // Create temporary canvas to capture the frame
+            const canvas = document.createElement('canvas');
+            canvas.width = 640;
+            canvas.height = 480;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Convert canvas to Blob (jpeg) and post
+            canvas.toBlob((blob) => {
+                if (!blob) return;
+
+                const formData = new FormData();
+                formData.append('image', blob, 'frame.jpg');
+                if (lat !== null) formData.append('latitude', lat);
+                if (lon !== null) formData.append('longitude', lon);
+
+                statusText.textContent = "Analyzing...";
+
+                fetch('/detect_potholes_images', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) throw new Error("Server error");
+                    return response.json();
+                })
+                .then(data => {
+                    // Update overlay frame image source from base64
+                    processedFrame.src = 'data:image/jpeg;base64,' + data.image;
+                    processedFrame.style.display = 'block';
+                    statusText.textContent = "Scanning...";
+
+                    if (data.detected) {
+                        const now = new Date().toLocaleTimeString();
+                        data.confidences.forEach((conf) => {
+                            detectedPotholes.push({
+                                timestamp: now,
+                                latitude: lat !== null ? lat : "",
+                                longitude: lon !== null ? lon : "",
+                                confidence: conf,
+                                city: data.city || locationVal.textContent || ""
+                            });
+                        });
+
+                        // Update Potholes count UI
+                        potholeCountVal.textContent = detectedPotholes.length;
+
+                        // Enable Export Button
+                        exportBtn.removeAttribute('disabled');
+                    }
+                })
+                .catch(err => {
+                    console.error("Frame processing failed:", err);
+                    statusText.textContent = "Network Lag";
+                });
+            }, 'image/jpeg', 0.7); // 0.7 quality to reduce upload size
+        }
+
+        // 5. Export Detections to CSV
+        exportBtn.addEventListener('click', () => {
+            if (detectedPotholes.length === 0) return;
+
+            const csvRows = ["Timestamp,Latitude,Longitude,Confidence,City"];
+            detectedPotholes.forEach((pothole) => {
+                csvRows.push([
+                    pothole.timestamp,
+                    pothole.latitude,
+                    pothole.longitude,
+                    pothole.confidence.toFixed(4),
+                    `"${pothole.city.replace(/"/g, '""')}"`
+                ].join(","));
+            });
+
+            const csvContent = csvRows.join("\n");
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+
+            const dateStr = new Date().toISOString().slice(0, 10);
+            link.setAttribute("download", `live_potholes_${dateStr}.csv`);
+            document.body.appendChild(link);
+            
+            link.click();
+            document.body.removeChild(link);
+        });
+    </script>
+</body>
+</html>

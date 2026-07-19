@@ -1,4 +1,5 @@
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, render_template
+from flask_cors import CORS
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -6,12 +7,13 @@ import time
 from gps_data.load_gps import load_gps_data, get_gps_for_timestamp
 from gps_data.reverse_geocode import geocode
 import csv
+import base64
 
 app = Flask(__name__)
+CORS(app)
 
 model = YOLO("model/best.pt")
 
-pothole_records = []
 location_cache = {}
 gps_data = load_gps_data("gps_data/gps_data.csv")
 
@@ -22,16 +24,22 @@ def save_potholes_to_csv(records, file_path):
         writer.writeheader()
 
         for record in records:
-            key = (record["lat"], record["lon"])
+            lat_rounded = round(record["lat"], 4)
+            lon_rounded = round(record["lon"], 4)
+            key = (lat_rounded, lon_rounded)
             if key not in location_cache:
-                location_cache[key] = geocode(record["lat"], record["lon"])
+                location_cache[key] = geocode(lat_rounded, lon_rounded)
                 time.sleep(1)   
 
             writer.writerow({**record,"city": location_cache[key]})
 
 @app.route("/", methods=["GET"])
 def home():
-    return "App is running"
+    return render_template("index.html")
+
+@app.route("/templates/highway.jpg", methods=["GET"])
+def serve_highway():
+    return send_file("templates/highway.jpg")
 
 @app.route("/detect_potholes_images", methods=["POST"])
 def detect():
@@ -49,12 +57,35 @@ def detect():
     output_path = "source/photo_detected_2.jpg"
     cv2.imwrite(output_path, annotated)
 
-    return send_file(
-        output_path,
-        as_attachment=True,
-        download_name="detected_image.jpg",
-        mimetype="image/jpeg"
-    )
+    # Encode annotated image to base64
+    _, img_encoded = cv2.imencode('.jpg', annotated)
+    img_base64 = base64.b64encode(img_encoded).decode('utf-8')
+
+    boxes = results[0].boxes
+    pothole_detected = len(boxes) > 0
+    confidences = [float(box.conf[0]) for box in boxes] if pothole_detected else []
+
+    # Get optional coordinates for geocoding
+    city = ""
+    lat = request.form.get("latitude")
+    lon = request.form.get("longitude")
+    if lat and lon and pothole_detected:
+        try:
+            lat_f = round(float(lat), 4)
+            lon_f = round(float(lon), 4)
+            key = (lat_f, lon_f)
+            if key not in location_cache:
+                location_cache[key] = geocode(lat_f, lon_f)
+            city = location_cache[key]
+        except Exception:
+            pass
+
+    return {
+        "image": img_base64,
+        "detected": pothole_detected,
+        "confidences": confidences,
+        "city": city
+    }
 
 @app.route("/detect_potholes_videos", methods=["POST"])
 def detect_videos():
@@ -63,6 +94,15 @@ def detect_videos():
         return {"error": "No video provided"}, 400
 
     video_file = request.files["video"]
+    pothole_records = []
+
+    if "gps_log" in request.files:
+        gps_file = request.files["gps_log"]
+        gps_input_path = "source2/uploaded_gps_log.csv"
+        gps_file.save(gps_input_path)
+        current_gps_data = load_gps_data(gps_input_path)
+    else:
+        current_gps_data = gps_data # Fallback to global GPS log
 
     input_path = "source2/input_potholes_video.mp4"
     output_path = "source2/output_potholes_video.mp4"
@@ -91,7 +131,7 @@ def detect_videos():
 
         for box in results[0].boxes:
             confidence = float(box.conf[0])
-            lat, lon = get_gps_for_timestamp(timestamp, gps_data)
+            lat, lon = get_gps_for_timestamp(timestamp, current_gps_data)
 
             pothole_records.append({
                 "lat": lat,
@@ -130,5 +170,8 @@ def download_potholes_csv():
     )
 
 
+import os
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 7860))
+    app.run(host="0.0.0.0", port=port, debug=False)
