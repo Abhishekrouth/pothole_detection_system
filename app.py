@@ -92,4 +92,4 @@ async def detect(image: UploadFile = File(...), latitude: str = Form(None), long
 
 # 5. Local development launch (if run directly)
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch()
