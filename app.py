@@ -1,66 +1,66 @@
-from flask import Flask, request, send_file, render_template
-from flask_cors import CORS
+import os
 import cv2
 import numpy as np
-from ultralytics import YOLO
+import base64
+import csv
 import time
+from ultralytics import YOLO
+import gradio as gr
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
 from gps_data.load_gps import load_gps_data, get_gps_for_timestamp
 from gps_data.reverse_geocode import geocode
-import csv
-import base64
-import spaces
 
-app = Flask(__name__)
-CORS(app)
-
+# 1. Load YOLO model
 model = YOLO("model/best.pt")
 
-@spaces.GPU
-def predict_potholes(img, conf=0.25):
-    return model(img, conf=conf)
+# GPU decorator wrapper for Hugging Face ZeroGPU
+try:
+    import spaces
+    @spaces.GPU
+    def predict_potholes(img, conf=0.25):
+        return model(img, conf=conf)
+except ImportError:
+    def predict_potholes(img, conf=0.25):
+        return model(img, conf=conf)
 
 location_cache = {}
-gps_data = load_gps_data("gps_data/gps_data.csv")
 
-def save_potholes_to_csv(records, file_path):
+# 2. Define Gradio Interface function (so Hugging Face is happy)
+def gradio_predict(img):
+    if img is None:
+        return None
+    results = predict_potholes(img)
+    return results[0].plot()
 
-    with open(file_path, mode="w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file,fieldnames=["timestamp", "lat", "lon", "confidence", "city"])
-        writer.writeheader()
+demo = gr.Interface(
+    fn=gradio_predict,
+    inputs=gr.Image(type="numpy"),
+    outputs=gr.Image(type="numpy"),
+    title="AI Pothole Detector",
+    description="Live inference endpoint"
+)
 
-        for record in records:
-            lat_rounded = round(record["lat"], 4)
-            lon_rounded = round(record["lon"], 4)
-            key = (lat_rounded, lon_rounded)
-            if key not in location_cache:
-                location_cache[key] = geocode(lat_rounded, lon_rounded)
-                time.sleep(1)   
+# 3. Get the underlying FastAPI app and enable CORS
+app = demo.app
 
-            writer.writerow({**record,"city": location_cache[key]})
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.route("/", methods=["GET"])
-def home():
-    return render_template("index.html")
-
-@app.route("/templates/highway.jpg", methods=["GET"])
-def serve_highway():
-    return send_file("templates/highway.jpg")
-
-@app.route("/detect_potholes_images", methods=["POST"])
-def detect():
-
-    if "image" not in request.files:
-        return {"error": "No image provided"}, 400
-
-    image_file = request.files["image"].read()
-    np_img = np.frombuffer(image_file, np.uint8)
+# 4. Custom API route for Vercel webcam frame detection
+@app.post("/detect_potholes_images")
+async def detect(image: UploadFile = File(...), latitude: str = Form(None), longitude: str = Form(None)):
+    image_bytes = await image.read()
+    np_img = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
     results = predict_potholes(img)
     annotated = results[0].plot()
-
-    output_path = "source/photo_detected_2.jpg"
-    cv2.imwrite(output_path, annotated)
 
     # Encode annotated image to base64
     _, img_encoded = cv2.imencode('.jpg', annotated)
@@ -72,12 +72,10 @@ def detect():
 
     # Get optional coordinates for geocoding
     city = ""
-    lat = request.form.get("latitude")
-    lon = request.form.get("longitude")
-    if lat and lon and pothole_detected:
+    if latitude and longitude and pothole_detected:
         try:
-            lat_f = round(float(lat), 4)
-            lon_f = round(float(lon), 4)
+            lat_f = round(float(latitude), 4)
+            lon_f = round(float(longitude), 4)
             key = (lat_f, lon_f)
             if key not in location_cache:
                 location_cache[key] = geocode(lat_f, lon_f)
@@ -92,91 +90,6 @@ def detect():
         "city": city
     }
 
-@app.route("/detect_potholes_videos", methods=["POST"])
-def detect_videos():
-
-    if "video" not in request.files:
-        return {"error": "No video provided"}, 400
-
-    video_file = request.files["video"]
-    pothole_records = []
-
-    if "gps_log" in request.files:
-        gps_file = request.files["gps_log"]
-        gps_input_path = "source2/uploaded_gps_log.csv"
-        gps_file.save(gps_input_path)
-        current_gps_data = load_gps_data(gps_input_path)
-    else:
-        current_gps_data = gps_data # Fallback to global GPS log
-
-    input_path = "source2/input_potholes_video.mp4"
-    output_path = "source2/output_potholes_video.mp4"
-
-    video_file.save(input_path)
-
-    cap = cv2.VideoCapture(input_path)
-
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25
-    
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-
-    frame_index = 0
-
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        timestamp = frame_index / fps
-
-        results = predict_potholes(frame, conf=0.5)
-
-        for box in results[0].boxes:
-            confidence = float(box.conf[0])
-            lat, lon = get_gps_for_timestamp(timestamp, current_gps_data)
-
-            pothole_records.append({
-                "lat": lat,
-                "lon": lon,
-                "confidence": confidence,
-                "timestamp": timestamp
-            })
-
-        annotated_frame = results[0].plot()
-        out.write(annotated_frame)
-
-        frame_index += 1
-
-    cap.release()
-    out.release()
-
-    csv_output_path = "source2/potholes_detected.csv"
-    save_potholes_to_csv(pothole_records, csv_output_path)
-
-    return send_file(
-        output_path,
-        as_attachment=True,
-        download_name="pothole_detected.mp4",
-        mimetype="video/mp4"
-    )
-
-
-@app.route("/download_potholes_data", methods=["GET"])
-def download_potholes_csv():
-    
-    return send_file(
-        "source2/potholes_detected.csv",
-        as_attachment=True,
-        download_name="potholes.csv",
-        mimetype="text/csv"
-    )
-
-
-import os
-
+# 5. Local development launch (if run directly)
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 7860))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    demo.launch(server_name="0.0.0.0", server_port=7860)
