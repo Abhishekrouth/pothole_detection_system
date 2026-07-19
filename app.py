@@ -11,17 +11,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from gps_data.load_gps import load_gps_data, get_gps_for_timestamp
 from gps_data.reverse_geocode import geocode
 
-# 1. Load YOLO model
-model = YOLO("model/best.pt")
+model = None
 
 # GPU decorator wrapper for Hugging Face ZeroGPU
 try:
     import spaces
     @spaces.GPU
     def predict_potholes(img, conf=0.25):
+        global model
+        if model is None:
+            model = YOLO("model/best.pt")
         return model(img, conf=conf)
 except ImportError:
     def predict_potholes(img, conf=0.25):
+        global model
+        if model is None:
+            model = YOLO("model/best.pt")
         return model(img, conf=conf)
 
 location_cache = {}
