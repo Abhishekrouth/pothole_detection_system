@@ -544,6 +544,21 @@
         const statusDot = document.getElementById('status-dot');
         const statusText = document.getElementById('status-text');
 
+        // On-screen debug logger
+        function logDebug(msg, type = 'info') {
+            console.log(`[DEBUG] ${msg}`);
+            let debugBox = document.getElementById('debug-box');
+            if (!debugBox) {
+                debugBox = document.createElement('div');
+                debugBox.id = 'debug-box';
+                debugBox.style.cssText = 'margin-top:10px; padding:8px; background:#111827; color:#38bdf8; font-family:monospace; font-size:0.7rem; border-radius:8px; max-height:80px; overflow-y:auto; word-break:break-all; border:1px solid #374151;';
+                document.querySelector('.container').appendChild(debugBox);
+            }
+            const timeStr = new Date().toLocaleTimeString();
+            const color = type === 'error' ? '#f87171' : (type === 'success' ? '#4ade80' : '#38bdf8');
+            debugBox.innerHTML = `<div style="color:${color};">[${timeStr}] ${msg}</div>` + debugBox.innerHTML;
+        }
+
         // Modal Elements
         const infoBtn = document.getElementById('info-btn');
         const infoModal = document.getElementById('info-modal');
@@ -622,22 +637,48 @@
             statusText.textContent = "GPS Error";
         }
 
-        // 2. Request Camera Feed (preferring rear camera)
-        navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: "environment", // rear camera
-                width: { ideal: 640 },
-                height: { ideal: 480 }
-            },
-            audio: false
-        })
-        .then((stream) => {
-            video.srcObject = stream;
-        })
-        .catch((err) => {
-            console.error("Camera Access Denied:", err);
-            statusText.textContent = "Cam Blocked";
-        });
+        // 2. Flexible Camera Feed Initialization (with fallback constraints)
+        function startCamera() {
+            video.muted = true;
+            video.playsInline = true;
+            video.setAttribute('playsinline', '');
+            video.setAttribute('muted', '');
+
+            const constraintsList = [
+                { video: { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+                { video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+                { video: true, audio: false }
+            ];
+
+            function tryConstraint(idx) {
+                if (idx >= constraintsList.length) {
+                    console.warn("Camera access denied or unavailable.");
+                    statusText.textContent = "Cam Unavailable";
+                    return;
+                }
+                navigator.mediaDevices.getUserMedia(constraintsList[idx])
+                .then((stream) => {
+                    video.srcObject = stream;
+                    video.onloadedmetadata = () => {
+                        video.play().catch(e => console.warn("Video play error:", e));
+                    };
+                    video.play().catch(() => {});
+                    statusText.textContent = "Idle";
+                })
+                .catch((err) => {
+                    console.warn(`Camera constraint ${idx} failed:`, err);
+                    tryConstraint(idx + 1);
+                });
+            }
+
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                tryConstraint(0);
+            } else {
+                statusText.textContent = "Cam Not Supported";
+            }
+        }
+
+        startCamera();
 
         // 3. Start/Stop Scanner
         scanBtn.addEventListener('click', () => {
@@ -653,8 +694,13 @@
                 statusDot.classList.remove('active');
                 statusText.textContent = "Idle";
                 processedFrame.style.display = 'none';
+                processedFrame.src = '';
             } else {
-                // Start Scanning
+                // If camera isn't active, try starting camera
+                if (!video.srcObject && !video.src) {
+                    startCamera();
+                }
+
                 isScanning = true;
                 scanBtn.innerHTML = `
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
@@ -664,71 +710,135 @@
                 statusDot.classList.add('active');
                 statusText.textContent = "Scanning...";
                 
-                // Capture and send frame every 1.5 seconds
-                scanInterval = setInterval(captureAndUploadFrame, 1500);
+                // Immediately trigger frame capture and schedule interval
+                captureAndUploadFrame();
+                scanInterval = setInterval(captureAndUploadFrame, 2500);
             }
         });
 
-        // 4. Capture Canvas Frame & Upload
+        // API base URL — uses current host origin (for local execution)
+        const getApiBaseUrl = () => window.location.origin;
+
+        let isUploading = false;
+
+        // 4. Capture Canvas Frame & Detect via Direct API
         function captureAndUploadFrame() {
-            if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+            if (!isScanning) {
+                logDebug("Scan skipped: not scanning", "info");
+                return;
+            }
+            if (isUploading) {
+                logDebug("Scan skipped: upload in progress", "info");
+                return;
+            }
 
-            // Create temporary canvas to capture the frame
-            const canvas = document.createElement('canvas');
-            canvas.width = 640;
-            canvas.height = 480;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            isUploading = true;
+            logDebug("Capturing frame...", "info");
 
-            // Convert canvas to Blob (jpeg) and post
-            canvas.toBlob((blob) => {
-                if (!blob) return;
+            try {
+                const width = video.videoWidth || 640;
+                const height = video.videoHeight || 480;
 
-                const formData = new FormData();
-                formData.append('image', blob, 'frame.jpg');
-                if (lat !== null) formData.append('latitude', lat);
-                if (lon !== null) formData.append('longitude', lon);
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                
+                try {
+                    ctx.drawImage(video, 0, 0, width, height);
+                } catch(e) {
+                    logDebug(`Draw image warning: ${e.message}`, "error");
+                }
+
+                let imgDataUrl = "";
+                try {
+                    imgDataUrl = canvas.toDataURL('image/jpeg', 0.70);
+                } catch(e) {
+                    logDebug(`Canvas encoding error: ${e.message}`, "error");
+                    isUploading = false;
+                    return;
+                }
 
                 statusText.textContent = "Analyzing...";
+                const baseUrl = getApiBaseUrl();
+                const postPayload = {
+                    image: imgDataUrl,
+                    latitude: lat !== null ? String(lat) : "",
+                    longitude: lon !== null ? String(lon) : ""
+                };
 
-                fetch('https://abhishekrouth-pothole-detector.hf.space/detect_potholes_images', {
+                const apiUrl = `${baseUrl}/api/detect_live`;
+                logDebug(`Sending POST to ${apiUrl}`, "info");
+
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+                fetch(apiUrl, {
                     method: 'POST',
-                    body: formData
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify(postPayload),
+                    signal: controller.signal
                 })
-                .then(response => {
-                    if (!response.ok) throw new Error("Server error");
-                    return response.json();
+                .then(res => {
+                    clearTimeout(timeoutId);
+                    logDebug(`API HTTP response status: ${res.status}`, res.ok ? "success" : "error");
+                    if (!res.ok) throw new Error(`API returned status ${res.status}`);
+                    return res.json();
                 })
-                .then(data => {
-                    // Update overlay frame image source from base64
-                    processedFrame.src = 'data:image/jpeg;base64,' + data.image;
-                    processedFrame.style.display = 'block';
-                    statusText.textContent = "Scanning...";
+                .then(infoData => {
+                    logDebug(`Received result: detected=${infoData?.detected}, count=${infoData?.count}`, infoData?.detected ? "success" : "info");
+                    if (infoData) {
+                        if (infoData.detected && infoData.image) {
+                            processedFrame.src = infoData.image;
+                            processedFrame.style.display = 'block';
+                        } else {
+                            processedFrame.style.display = 'none';
+                            processedFrame.src = '';
+                        }
 
-                    if (data.detected) {
-                        const now = new Date().toLocaleTimeString();
-                        data.confidences.forEach((conf) => {
-                            detectedPotholes.push({
-                                timestamp: now,
-                                latitude: lat !== null ? lat : "",
-                                longitude: lon !== null ? lon : "",
-                                confidence: conf,
-                                city: data.city || locationVal.textContent || ""
-                            });
-                        });
+                        if (infoData.detected && (infoData.count > 0 || (infoData.confidences && infoData.confidences.length > 0))) {
+                            const confList = infoData.confidences || [];
+                            const confStr = confList.map(c => typeof c === 'number' ? c.toFixed(2) : c).join(', ');
+                            statusText.textContent = `Pothole Detected! (${confStr})`;
 
-                        // Update Potholes count UI
-                        potholeCountVal.textContent = detectedPotholes.length;
+                            const count = infoData.count || confList.length || 1;
+                            const now = new Date().toLocaleTimeString();
+                            for (let i = 0; i < count; i++) {
+                                const conf = (confList[i] !== undefined) ? confList[i] : 0.85;
+                                detectedPotholes.push({
+                                    timestamp: now,
+                                    latitude: lat !== null ? lat : "",
+                                    longitude: lon !== null ? lon : "",
+                                    confidence: conf,
+                                    city: infoData.city || locationVal.textContent || ""
+                                });
+                            }
 
-                        // Enable Export Button
-                        exportBtn.removeAttribute('disabled');
+                            potholeCountVal.textContent = detectedPotholes.length;
+                            exportBtn.removeAttribute('disabled');
+                        } else {
+                            statusText.textContent = "Scanning...";
+                        }
+                    } else {
+                        processedFrame.style.display = 'none';
+                        statusText.textContent = "Scanning...";
                     }
                 })
                 .catch(err => {
-                    console.error("Frame processing failed:", err);
-                    statusText.textContent = "Network Lag";
+                    clearTimeout(timeoutId);
+                    logDebug(`Fetch failed: ${err.message}`, "error");
+                    statusText.textContent = "Scanning (retrying)...";
+                })
+                .finally(() => {
+                    isUploading = false;
                 });
-            }, 'image/jpeg', 0.7); // 0.7 quality to reduce upload size
+            } catch(outerErr) {
+                logDebug(`Unexpected exception: ${outerErr.message}`, "error");
+                isUploading = false;
+            }
         }
 
         // 5. Export Detections to CSV

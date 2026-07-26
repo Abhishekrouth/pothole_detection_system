@@ -1,71 +1,24 @@
 import os
+os.environ["YOLO_CONFIG_DIR"] = "/tmp"
+
 import cv2
 import numpy as np
 import base64
 import csv
+import json
 import time
+from pathlib import Path
 from ultralytics import YOLO
 
-import gradio_client.utils as _gc_utils
-_orig_json_schema_to_python_type = _gc_utils._json_schema_to_python_type
-def _safe_json_schema_to_python_type(schema, defs=None):
-    if isinstance(schema, bool):
-        return "bool" if schema else "Any"
-    return _orig_json_schema_to_python_type(schema, defs)
-_gc_utils._json_schema_to_python_type = _safe_json_schema_to_python_type
-
-import gradio as gr
-from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+
 from gps_data.load_gps import load_gps_data, get_gps_for_timestamp
 from gps_data.reverse_geocode import geocode
 
-model = None
-
-# GPU decorator wrapper for Hugging Face ZeroGPU
-try:
-    import spaces
-    @spaces.GPU
-    def predict_potholes(img, conf=0.15):
-        global model
-        if model is None:
-            model = YOLO("model/best.pt")
-        return model(img, conf=conf)
-except ImportError:
-    def predict_potholes(img, conf=0.15):
-        global model
-        if model is None:
-            model = YOLO("model/best.pt")
-        return model(img, conf=conf)
-
-location_cache = {}
-
-# Load GPS data on startup if available
-gps_data_list = []
-if os.path.exists("gps_data/gps_data.csv"):
-    try:
-        gps_data_list = load_gps_data("gps_data/gps_data.csv")
-    except Exception:
-        gps_data_list = []
-
-# 2. Define Gradio Interface function (so Hugging Face is happy)
-def gradio_predict(img):
-    if img is None:
-        return None
-    results = predict_potholes(img)
-    return results[0].plot()
-
-demo = gr.Interface(
-    fn=gradio_predict,
-    inputs=gr.Image(type="numpy"),
-    outputs=gr.Image(type="numpy"),
-    title="AI Pothole Detector",
-    description="Live inference endpoint"
-)
-
-# 3. Get the underlying FastAPI app and enable CORS
-app = demo.app
+app = FastAPI(title="AI-Powered Pothole Detection API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -75,128 +28,125 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 4. Custom API route for image detection
-@app.post("/detect_potholes_images")
-async def detect(
-    image: UploadFile = File(...),
-    latitude: str = Form(None),
-    longitude: str = Form(None),
-    conf: float = Form(0.15)
-):
-    image_bytes = await image.read()
-    np_img = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+model = None
 
-    results = predict_potholes(img, conf=conf)
-    annotated = results[0].plot()
+def _run_yolo(img, conf=0.025):
+    global model
+    if model is None:
+        model = YOLO("model/best.pt")
+    
+    # Resize frame to max 640px for accurate YOLO feature extraction
+    h, w = img.shape[:2]
+    if max(h, w) > 640:
+        scale = 640 / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        resized_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    else:
+        resized_img = img
 
-    # Encode annotated image to base64
-    _, img_encoded = cv2.imencode('.jpg', annotated)
-    img_base64 = base64.b64encode(img_encoded).decode('utf-8')
+    return model(resized_img, conf=conf, imgsz=640)
 
-    boxes = results[0].boxes
-    pothole_detected = len(boxes) > 0
-    confidences = [float(box.conf[0]) for box in boxes] if pothole_detected else []
+def predict_potholes(img, conf=0.025):
+    return _run_yolo(img, conf=conf)
 
-    # Get optional coordinates for geocoding
-    city = ""
-    if latitude and longitude and pothole_detected:
-        try:
-            lat_f = round(float(latitude), 4)
-            lon_f = round(float(longitude), 4)
-            key = (lat_f, lon_f)
-            if key not in location_cache:
-                location_cache[key] = geocode(lat_f, lon_f)
-            city = location_cache[key]
-        except Exception:
-            pass
+location_cache = {}
 
-    return {
-        "image": img_base64,
-        "detected": pothole_detected,
-        "confidences": confidences,
-        "city": city
-    }
+gps_data_list = []
+if os.path.exists("gps_data/gps_data.csv"):
+    try:
+        gps_data_list = load_gps_data("gps_data/gps_data.csv")
+    except Exception:
+        gps_data_list = []
 
-# 5. Video detection endpoint
-@app.post("/detect_potholes_videos")
-async def detect_video(
-    video: UploadFile = File(...),
-    conf: float = Form(0.15)
-):
-    os.makedirs("source2", exist_ok=True)
-    input_path = "source2/input_potholes_video.mp4"
-    output_path = "source2/output_potholes_video.mp4"
-    csv_path = "source2/potholes_detected.csv"
+# ── API Endpoints ──────────────────────────────────────────────────────────
 
-    video_bytes = await video.read()
-    with open(input_path, "wb") as f:
-        f.write(video_bytes)
+_BASE_DIR = Path(__file__).parent
 
-    cap = cv2.VideoCapture(input_path)
-    if not cap.isOpened():
-        return {"error": "Could not open uploaded video file."}
+@app.get("/", response_class=HTMLResponse)
+@app.get("/scanner", response_class=HTMLResponse)
+async def serve_scanner():
+    index_path = _BASE_DIR / "index.html"
+    if index_path.exists():
+        return HTMLResponse(content=index_path.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>Scanner UI not found</h1>", status_code=404)
 
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+@app.get("/highway.jpg")
+async def serve_highway_image():
+    img_path = _BASE_DIR / "highway.jpg"
+    if img_path.exists():
+        return FileResponse(str(img_path), media_type="image/jpeg")
+    return JSONResponse({"error": "Not found"}, status_code=404)
 
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+@app.options("/api/detect_live")
+async def options_detect_live():
+    return JSONResponse(content={"status": "ok"}, headers={
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "*"
+    })
 
-    records = []
-    frame_index = 0
+@app.post("/api/detect_live")
+async def api_detect_live(request: Request):
+    print("Received POST /api/detect_live request")
+    try:
+        data = await request.json()
+        img_data_url = data.get("image", "")
+        latitude = data.get("latitude", "")
+        longitude = data.get("longitude", "")
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+        if not img_data_url or not isinstance(img_data_url, str):
+            return JSONResponse(content={"image": "", "detected": False, "count": 0, "confidences": [], "city": ""})
 
-        results = predict_potholes(frame, conf=conf)
-        annotated_frame = results[0].plot()
-        out.write(annotated_frame)
+        raw_b64 = img_data_url
+        if "," in raw_b64:
+            raw_b64 = raw_b64.split(",", 1)[1]
+        raw_b64 = raw_b64.replace(' ', '+')
+        missing_padding = len(raw_b64) % 4
+        if missing_padding:
+            raw_b64 += '=' * (4 - missing_padding)
+
+        img_bytes = base64.b64decode(raw_b64)
+        np_img = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+
+        if img is None:
+            return JSONResponse(content={"image": "", "detected": False, "count": 0, "confidences": [], "city": ""})
+
+        results = predict_potholes(img, conf=0.025)
+        if not results or len(results) == 0:
+            return JSONResponse(content={"image": "", "detected": False, "count": 0, "confidences": [], "city": ""})
 
         boxes = results[0].boxes
-        if len(boxes) > 0:
-            timestamp = round(frame_index / fps, 2)
-            lat, lon = (0.0, 0.0)
-            city = ""
+        pothole_detected = len(boxes) > 0
+        annotated = results[0].plot()
+        _, img_encoded = cv2.imencode('.jpg', annotated)
+        img_base64 = base64.b64encode(img_encoded).decode('utf-8')
+        confidences = [round(float(b.conf[0]), 3) for b in boxes] if pothole_detected else []
 
-            if gps_data_list:
-                try:
-                    lat, lon = get_gps_for_timestamp(timestamp, gps_data_list)
-                    lat_r, lon_r = round(lat, 4), round(lon, 4)
-                    key = (lat_r, lon_r)
-                    if key not in location_cache:
-                        location_cache[key] = geocode(lat_r, lon_r)
-                    city = location_cache[key]
-                except Exception:
-                    city = ""
+        city = ""
+        if latitude and longitude and pothole_detected:
+            try:
+                lat_f = round(float(latitude), 4)
+                lon_f = round(float(longitude), 4)
+                key = (lat_f, lon_f)
+                if key not in location_cache:
+                    location_cache[key] = geocode(lat_f, lon_f)
+                city = location_cache[key]
+            except Exception:
+                pass
 
-            for box in boxes:
-                conf = float(box.conf[0])
-                records.append([timestamp, lat, lon, conf, city])
+        img_src = f"data:image/jpeg;base64,{img_base64}" if pothole_detected else ""
+        return JSONResponse(content={
+            "image": img_src,
+            "detected": pothole_detected,
+            "count": len(boxes) if pothole_detected else 0,
+            "confidences": confidences,
+            "city": city
+        })
+    except Exception as e:
+        print("Live detection error:", e)
+        return JSONResponse(content={"image": "", "detected": False, "count": 0, "confidences": [], "city": ""}, status_code=500)
 
-        frame_index += 1
-
-    cap.release()
-    out.release()
-
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["timestamp", "lat", "lon", "confidence", "city"])
-        writer.writerows(records)
-
-    return FileResponse(output_path, media_type="video/mp4", filename="pothole_detected.mp4")
-
-# 6. Download detected pothole data CSV
-@app.get("/download_potholes_data")
-async def download_potholes_data():
-    csv_path = "source2/potholes_detected.csv"
-    if not os.path.exists(csv_path):
-        return {"error": "No pothole data records found."}
-    return FileResponse(csv_path, media_type="text/csv", filename="potholes_detected.csv")
-
-# 7. Local development launch (if run directly)
 if __name__ == "__main__":
-    demo.launch()
+    port = int(os.environ.get("PORT", 7860))
+    uvicorn.run(app, host="0.0.0.0", port=port)
