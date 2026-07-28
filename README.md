@@ -100,8 +100,3 @@ Click **Start Scanning** and allow camera and location permissions. Point the ca
   - **Response**: Returns annotated base64 frame, `detected` boolean, detection `count`, confidence scores list, and geocoded `city`/address.
 
 ---
-
-## 🎓 Presentation & Demo Tips
-
-- To demonstrate pothole detection indoors, point your camera at an image or video of a road pothole displayed on a smartphone/monitor screen.
-- Click **Export CSV Report** to download the structured detection log with exact timestamps, GPS coordinates, and address information.
